@@ -5,6 +5,9 @@ import os
 import numpy as np
 from PIL import Image, ImageTk
 import cv2
+import csv
+import datetime
+from memory_profiler import profile
 
 class Application(tk.Frame):
     def __init__(self, master = None):
@@ -21,10 +24,27 @@ class Application(tk.Frame):
 
         self.edittingImagePathList = []
         self._temp_image_file = ""
+
         self.canvasOriImage = ""
+        self.onlyLineImage = ""
         self.tempImagePlusCircle = ""
         self.tempImage = ""
+
+        self.mode = "selectCsv"
+        self.isLineDrawn = False
+        self.isPlotted = False
+
+        self.pointOnLineList = []
         self.resizeOrder = 1
+
+        self.processCount = 0
+        self.date = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+        self.LINE_COLOR = (75, 184, 86)
+        self.POINT_COLOR = (163, 106, 1)
+        self.TEXT_COLOR = (71, 60, 0)
+        self.WHITE_COLOR = (220, 220, 220)
+        self.RED_COLOR = (160, 170, 247)
 
         self.startX = 0
         self.startY = 0
@@ -114,7 +134,6 @@ class Application(tk.Frame):
             state = tk.DISABLED
         )
 
-
         self.imageCanvas.pack(side = tk.LEFT, fill = tk.BOTH)
         operateFrame.pack(side = tk.RIGHT, fill = tk.BOTH)
         self.csvButton.pack(side = tk.TOP, pady = 10,)
@@ -124,16 +143,43 @@ class Application(tk.Frame):
 
 
     def clearButtonClicked(self):
+        if self.mode == "drawLine":
+            self.clearDrawLine()
+        elif self.mode == "plotting":
+            if self.isPlotted == False:
+                self.clearDrawLine()
+            else:
+                self.isPlotted = False
+                self.doneButton.configure(state = tk.DISABLED)
+                self.initEditImages()
+                self.opencvImgDisplay(self.onlyLineImage)
+
+    def clearDrawLine(self):
+        self.mode = "drawLine"
         self.initEditImages()
         self.opencvImgDisplay(self.canvasOriImage)
-        
+        self.isLineDrawn = False
+
         self.clearButton.configure(state = tk.DISABLED)
         self.doneButton.configure(state = tk.DISABLED)
 
+
     def doneButtonClicked(self):
-        print("done")
-        print(self.beginX, self.beginY)
-        print(self.finalX, self.finalY)
+        if self.mode == "plotting":
+            self.distanseListToCsv(self.distanseList)
+
+            self.mode = "drawLine"
+            self.processCount += 1
+            self.clearButton.configure(state = tk.DISABLED)
+            self.doneButton.configure(state = tk.DISABLED)
+            self.imageSet(self.edittingImagePathList[self.processCount])
+
+
+    def distanseListToCsv(self, list):
+        with open(self.csvName, "a",  newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([self.edittingImagePathList[self.processCount].stem] + list)
+
 
     def getImagePathsFromDir(self):
         iDir = os.path.expanduser('~/Document/MIJDB')
@@ -144,6 +190,7 @@ class Application(tk.Frame):
 
         self.chooseEdittingImages(dPathList)
 
+
     def chooseEdittingImages(self, dPathList):
         # WindowsPath('C:/Users/user/Downloads/AmazonPhotos (1)/
         # 20220217102111_
@@ -152,15 +199,24 @@ class Application(tk.Frame):
 
         for path in dPathList:
             imageIndex = path.stem.split("_")[-1]
-            if imageIndex in ["1","6"]:
+            if imageIndex in ["3","6"]:
                 self.edittingImagePathList.append(path)
 
+        self.csvName = str(self.edittingImagePathList[0].parents[1]) + "/" + str(self.date) + "_DistanceData.csv"
         self.imageSet(self.edittingImagePathList[0])
 
+
     def initEditImages(self):
-        self.onlyLineImage = self.canvasOriImage.copy()
-        self.tempImagePlusCircle = self.canvasOriImage.copy()
-        self.tempImage = self.tempImagePlusCircle.copy()
+        if self.mode == "drawLine":
+            self.onlyLineImage = self.canvasOriImage.copy()
+            self.tempImagePlusCircle = self.canvasOriImage.copy()
+            self.tempImage = self.tempImagePlusCircle.copy()
+        elif self.mode == "plotting":
+            self.tempImagePlusCircle = self.onlyLineImage.copy()
+            self.tempImage = self.onlyLineImage.copy()
+            self.distanseList = []
+            self.pointOnLineList = []
+
 
     def createCanvasImage(self, img, width, height):
         # 背景となるCanvasサイズの黒画像
@@ -186,6 +242,7 @@ class Application(tk.Frame):
 
         return cv2.cvtColor(np.asarray(result_image), cv2.COLOR_RGBA2BGRA)
 
+
     def scaleImageToBox(self, img, width, height):
         isWide = False
         h, w = img.shape[:2]
@@ -204,18 +261,18 @@ class Application(tk.Frame):
 
         return dst, isWide
 
+
     def openCVToTkData(self, image_bgr):
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         image_pil = Image.fromarray(image_rgb)
         image_tk  = ImageTk.PhotoImage(image_pil)
         return image_tk
 
+
     def imageSet(self, dirPath):
         img = self.imread(str(dirPath))
         self.canvasOriImage = self.createCanvasImage(img, self.canvasWidth, self.canvasHeight)
-        self.initEditImages()
         img = self.openCVToTkData(self.canvasOriImage)
-
         self.imageCanvas.create_image(
             self.canvasWidth / 2,
             self.canvasHeight / 2,
@@ -224,6 +281,10 @@ class Application(tk.Frame):
         self._temp_image_file = img
 
         self.csvButton.configure(state = tk.DISABLED)
+
+        self.mode = "drawLine"
+        self.initEditImages()
+
         self.imageCanvas.bind('<ButtonPress-1>', self.mouseDown)
         self.imageCanvas.bind('<B1-Motion>', self.mouseMove)
         self.imageCanvas.bind('<ButtonRelease-1>', self.mouseUp)
@@ -237,6 +298,10 @@ class Application(tk.Frame):
 
             x2 = self.canvasWidth
             y2 = endY - slope * (endX - x2)
+
+            if y1 == y2:
+                y2 += 1
+
         else:
             x1 = startX
             y1 = 0
@@ -245,6 +310,7 @@ class Application(tk.Frame):
             y2 = self.canvasHeight
 
         return int(x1), int(y1), int(x2), int(y2)
+
 
     def opencvImgDisplay(self, img):
         img = self.openCVToTkData(img)
@@ -256,9 +322,29 @@ class Application(tk.Frame):
         )
 
         self._temp_image_file = img
-        
 
     def mouseDown(self, event):
+        if self.mode == "drawLine":
+            self.drawLineMouseDown(event)
+        elif self.mode == "plotting":
+            self.plottingMouseDown(event)
+
+    def mouseMove(self, event):
+        if self.mode == "drawLine":
+            self.drawLineMouseMove(event)
+
+    def mouseUp(self, event):
+        if self.mode == "drawLine":
+            self.drawLineMouseUp(event)
+            self.isLineDrawn = False
+            self.mode = "plotting"
+            self.initEditImages()
+        
+
+    def drawLineMouseDown(self, event):
+        if self.isLineDrawn == True:
+            return
+
         self.startX = event.x
         self.startY = event.y
 
@@ -266,12 +352,15 @@ class Application(tk.Frame):
             self.tempImagePlusCircle,
             (self.startX, self.startY),
             7,
-            (255, 255, 0),
+            self.POINT_COLOR,
             thickness = -1
         )
 
 
-    def mouseMove(self, event):
+    def drawLineMouseMove(self, event):
+        if self.isLineDrawn == True:
+            return
+
         self.nowX = event.x
         self.nowY = event.y
 
@@ -282,7 +371,7 @@ class Application(tk.Frame):
             self.tempImage,
             (beginX, beginY),
             (finalX, finalY),
-            (255, 0, 0),
+            self.LINE_COLOR,
             5
         )
 
@@ -290,7 +379,10 @@ class Application(tk.Frame):
         self.tempImage = self.tempImagePlusCircle.copy()
 
 
-    def mouseUp(self, event):
+    def drawLineMouseUp(self, event):
+        if self.isLineDrawn == True:
+            return
+
         self.endX = event.x
         self.endY = event.y
 
@@ -301,18 +393,98 @@ class Application(tk.Frame):
             self.onlyLineImage,
             (self.beginX, self.beginY),
             (self.finalX, self.finalY),
-            (255, 0, 0),
+            self.LINE_COLOR,
             5
         )
 
         self.opencvImgDisplay(self.onlyLineImage)
         
-        self.enableButton()
-        self.trakingId = None
-
-    def enableButton(self):
         self.clearButton.configure(state = tk.NORMAL)
-        self.doneButton.configure(state = tk.NORMAL)
+        self.isLineDrawn = True
+
+
+    # a = 1 で固定して計算している
+    def calculateMinDistancePoint(self, b, c, x, y):
+        hx = (b**2*x - b*y - c) / (1 + b**2)
+        hy = (y - b*x - b*c) / (1 + b**2)
+
+        return [int(hx), int(hy)]
+
+    def calculateCoefficient(self, x1, y1, x2, y2):
+        b = (x1 - x2) / (y2 - y1)
+        c = (x2*y1 - x1*y2) / (y2 - y1)
+
+        return b, c
+
+
+    def plottingMouseDown(self, event):
+        x = event.x
+        y = event.y
+
+        b, c = self.calculateCoefficient(self.beginX, self.beginY, self.finalX, self.finalY)
+        pointOnLine = self.calculateMinDistancePoint(b, c, x, y)
+
+        cv2.circle(
+            self.tempImagePlusCircle,
+            (pointOnLine[0], pointOnLine[1]),
+            7,
+            self.POINT_COLOR,
+            thickness = -1
+        )
+
+        self.isPlotted = True
+        self.pointOnLineList.append(pointOnLine)
+        self.displayDistanceBetweenPoint(self.pointOnLineList)
+
+        if len(self.pointOnLineList) >= 2:
+            self.doneButton.configure(state = tk.NORMAL)
+
+
+    def displayDistanceBetweenPoint(self, pointList):
+        sortedList = np.array(sorted(pointList))
+        if len(sortedList) == 1:
+            self.opencvImgDisplay(self.tempImagePlusCircle)
+            return
+
+        self.tempImage = self.tempImagePlusCircle.copy()
+        self.distanseList = []
+
+        for i in range(len(sortedList) - 1):
+            distance = (np.linalg.norm(sortedList[i+1] - sortedList[i]) / self.resizeOrder).astype(int)
+            centerPoint = ((sortedList[i+1] + sortedList[i]) / 2).astype(int)
+            if i % 2 == 1:
+                position = [centerPoint[0]-20, centerPoint[1]-40]
+                color = self.RED_COLOR
+            else:
+                position = [centerPoint[0]-20, centerPoint[1]+40]
+                color = self.WHITE_COLOR
+
+            self.writeTextAndRectangle(str(distance), position, color)
+            
+            self.distanseList.append(distance)
+            self.opencvImgDisplay(self.tempImage)
+
+    def writeTextAndRectangle(self, distance, position, color):
+        cv2.rectangle(
+            self.tempImage,
+            (position[0]-10, position[1]-30),
+            (position[0]+70, position[1]+10),
+            color,
+            -1,
+            cv2.LINE_4
+        )
+
+        cv2.putText(
+            self.tempImage,
+            str(distance),
+            position,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            self.TEXT_COLOR,
+            3,
+            cv2.LINE_4
+        )
+
 
 
 if __name__ == "__main__":
